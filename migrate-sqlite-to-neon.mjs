@@ -38,6 +38,38 @@ try {
   try {
     await client.query("BEGIN");
     await client.query(`
+      CREATE TABLE IF NOT EXISTS menu_items (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        category TEXT NOT NULL,
+        price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+        emoji TEXT NOT NULL,
+        available BOOLEAN NOT NULL DEFAULT TRUE
+      );
+      CREATE TABLE IF NOT EXISTS orders (
+        id TEXT PRIMARY KEY,
+        receipt_token_hash TEXT NOT NULL,
+        table_number TEXT NOT NULL,
+        service_type TEXT NOT NULL DEFAULT 'dine_in',
+        status TEXT NOT NULL DEFAULT 'queued',
+        payment_status TEXT NOT NULL DEFAULT 'pending',
+        total_cents INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS order_items (
+        id BIGSERIAL PRIMARY KEY,
+        order_id TEXT NOT NULL REFERENCES orders(id),
+        menu_item_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        quantity INTEGER NOT NULL,
+        price_cents INTEGER NOT NULL,
+        preferences TEXT NOT NULL DEFAULT ''
+      );
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS service_type TEXT NOT NULL DEFAULT 'dine_in';
+      ALTER TABLE order_items ADD COLUMN IF NOT EXISTS preferences TEXT NOT NULL DEFAULT '';
+    `);
+    await client.query(`
       CREATE TABLE IF NOT EXISTS app_data_migrations (
         id TEXT PRIMARY KEY,
         completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
