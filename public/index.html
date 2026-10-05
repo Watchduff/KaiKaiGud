@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="bi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#090a09">
+    <meta name="description" content="Lukluk long menu, sendem oda, mo pem long kaonta.">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="apple-touch-icon" href="/favicon.svg">
+    <title>KAIKAIGUD — Oda blong kaekae</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="Hom pej blong KAIKAIGUD">
+          <img class="brand-logo" src="/kaikaigud-logo.png" alt="KAIKAIGUD">
+        </a>
+        <div class="header-right">
+          <span id="table-label" class="table-label"></span>
+          <a id="staff-link" class="staff-link" href="/staff">Log in blong ol wokman <span aria-hidden="true">↗</span></a>
+        </div>
+      </header>
+
+      <main id="app" aria-live="polite">
+        <div class="loading-state"><span class="loading-dot"></span> Mifala i stap rere long tebol…</div>
+      </main>
+
+      <footer class="site-footer">
+        <span>Mekem niu, givim wetem kea.</span>
+        <span>Gat kwestin? Tim blong mifala i stap long ples ya.</span>
+      </footer>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

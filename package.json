@@ -1,0 +1,20 @@
+{
+  "name": "restaurant-ordering-mvp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prestart": "node setup.mjs",
+    "start": "node server.mjs",
+    "migrate:neon": "node migrate-sqlite-to-neon.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^18.0.5",
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4"
+  }
+}
