@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { createServer } from "node:http";
-import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
@@ -10,8 +10,12 @@ import QRCode from "qrcode";
 const port = Number(process.env.PORT || 3000);
 const adminUsername = process.env.ADMIN_USERNAME;
 const adminPassword = process.env.ADMIN_PASSWORD;
+const sessionSecret = process.env.SESSION_SECRET || (!process.env.VERCEL ? randomBytes(32).toString("base64url") : "");
 if (!adminUsername || !adminPassword || adminPassword.length < 12) {
   throw new Error("Set ADMIN_USERNAME and an ADMIN_PASSWORD of at least 12 characters in .env.");
+}
+if (sessionSecret.length < 32) {
+  throw new Error("Set SESSION_SECRET to a random secret of at least 32 characters in the deployment environment.");
 }
 
 const staticFiles = new Map([
@@ -131,6 +135,11 @@ if (usePostgres) {
     );
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS service_type TEXT NOT NULL DEFAULT 'dine_in';
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS preferences TEXT NOT NULL DEFAULT '';
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      ip_hash TEXT PRIMARY KEY,
+      count INTEGER NOT NULL,
+      reset_at BIGINT NOT NULL
+    );
   `);
 } else {
   await db.exec(`
@@ -161,6 +170,11 @@ if (usePostgres) {
       quantity INTEGER NOT NULL,
       price_cents INTEGER NOT NULL,
       preferences TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      ip_hash TEXT PRIMARY KEY,
+      count INTEGER NOT NULL,
+      reset_at BIGINT NOT NULL
     );
   `);
 }
@@ -260,8 +274,8 @@ const updateUneditedStarter = db.prepare(`
   UPDATE menu_items
   SET name = ?,
       description = ?,
-      price_cents = CASE WHEN ? IS NOT NULL AND price_cents = ? THEN ? ELSE price_cents END,
-      emoji = CASE WHEN ? IS NOT NULL AND emoji = ? THEN ? ELSE emoji END
+      price_cents = CASE WHEN CAST(? AS INTEGER) IS NOT NULL AND price_cents = ? THEN ? ELSE price_cents END,
+      emoji = CASE WHEN CAST(? AS TEXT) IS NOT NULL AND emoji = ? THEN ? ELSE emoji END
   WHERE id = ? AND name = ? AND description = ?
 `);
 for (const item of legacyStarterItems) {
@@ -292,8 +306,6 @@ for (const item of legacyStarterItems.filter((starter) => starter.newPrice != nu
   }
 }
 
-const sessions = new Map();
-const loginAttempts = new Map();
 const sessionDurationMs = 12 * 60 * 60 * 1000;
 const loginSalt = randomBytes(16);
 const expectedPasswordHash = scryptSync(adminPassword, loginSalt, 64);
@@ -337,14 +349,14 @@ function cookieValue(request, name) {
 }
 
 function authenticated(request) {
-  const id = cookieValue(request, "restaurant_staff");
-  const expiresAt = sessions.get(id);
-  if (!expiresAt || expiresAt < Date.now()) {
-    sessions.delete(id);
-    return false;
-  }
-  sessions.set(id, Date.now() + sessionDurationMs);
-  return true;
+  const [id, expiryText, signature, ...extra] = cookieValue(request, "restaurant_staff").split(".");
+  if (!id || !expiryText || !signature || extra.length || !/^\d+$/.test(expiryText)) return false;
+  const expiresAt = Number(expiryText);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return false;
+  const payload = `${id}.${expiryText}`;
+  const expected = Buffer.from(createHmac("sha256", sessionSecret).update(payload).digest("base64url"));
+  const provided = Buffer.from(signature);
+  return expected.length === provided.length && timingSafeEqual(expected, provided);
 }
 
 function requireStaff(request, response) {
@@ -354,16 +366,22 @@ function requireStaff(request, response) {
 }
 
 function secureCookie() {
-  return process.env.COOKIE_SECURE === "true" ? "; Secure" : "";
+  return process.env.VERCEL || process.env.COOKIE_SECURE === "true" ? "; Secure" : "";
 }
 
-function checkLoginLimit(ip) {
-  const current = loginAttempts.get(ip);
-  if (!current || current.resetAt <= Date.now()) {
-    loginAttempts.set(ip, { count: 0, resetAt: Date.now() + 15 * 60 * 1000 });
-    return loginAttempts.get(ip);
-  }
-  return current;
+async function recordLoginAttempt(ip) {
+  const now = Date.now();
+  const resetAt = now + 15 * 60 * 1000;
+  const ipHash = createHmac("sha256", sessionSecret).update(ip).digest("hex");
+  const result = await db.prepare(`
+    INSERT INTO login_attempts (ip_hash, count, reset_at)
+    VALUES (?, 1, ?)
+    ON CONFLICT (ip_hash) DO UPDATE SET
+      count = CASE WHEN login_attempts.reset_at <= ? THEN 1 ELSE login_attempts.count + 1 END,
+      reset_at = CASE WHEN login_attempts.reset_at <= ? THEN ? ELSE login_attempts.reset_at END
+    RETURNING count
+  `).get(ipHash, resetAt, now, now, resetAt);
+  return { ipHash, count: result.count };
 }
 
 async function orderDetails(id) {
@@ -482,9 +500,10 @@ async function handleApi(request, response, url) {
   }
 
   if (method === "POST" && path === "/api/staff/login") {
-    const ip = request.socket.remoteAddress || "unknown";
-    const attempts = checkLoginLimit(ip);
-    if (attempts.count >= 5) return sendJson(response, 429, { error: "Too many sign-in attempts. Try again in 15 minutes." });
+    const forwardedIp = request.headers["x-forwarded-for"]?.split(",")[0]?.trim();
+    const ip = process.env.VERCEL ? forwardedIp || "unknown" : request.socket.remoteAddress || "unknown";
+    const attempts = await recordLoginAttempt(ip);
+    if (attempts.count > 5) return sendJson(response, 429, { error: "Too many sign-in attempts. Try again in 15 minutes." });
 
     const body = await readJson(request);
     const username = typeof body.username === "string" ? body.username : "";
@@ -494,21 +513,20 @@ async function handleApi(request, response, url) {
     const validUsername = timingSafeEqual(usernameHash, expectedUsernameHash);
     const validPassword = timingSafeEqual(passwordHash, expectedPasswordHash);
     if (!validUsername || !validPassword) {
-      attempts.count += 1;
       return sendJson(response, 401, { error: "Username or password is incorrect." });
     }
 
-    loginAttempts.delete(ip);
+    await db.prepare("DELETE FROM login_attempts WHERE ip_hash = ?").run(attempts.ipHash);
     const id = randomBytes(32).toString("base64url");
-    sessions.set(id, Date.now() + sessionDurationMs);
+    const expiresAt = Date.now() + sessionDurationMs;
+    const payload = `${id}.${expiresAt}`;
+    const signature = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
     return sendJson(response, 200, { ok: true }, {
-      "Set-Cookie": `restaurant_staff=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionDurationMs / 1000}${secureCookie()}`,
+      "Set-Cookie": `restaurant_staff=${payload}.${signature}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionDurationMs / 1000}${secureCookie()}`,
     });
   }
 
   if (method === "POST" && path === "/api/staff/logout") {
-    const id = cookieValue(request, "restaurant_staff");
-    sessions.delete(id);
     return sendJson(response, 200, { ok: true }, {
       "Set-Cookie": `restaurant_staff=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookie()}`,
     });

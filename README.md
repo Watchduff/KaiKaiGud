@@ -27,13 +27,18 @@ Requires Node.js 20 or newer.
 
 Keep the terminal running while using the app. If the browser shows `ERR_CONNECTION_REFUSED`, the server is stopped; run `npm start` again and open the address printed in the terminal. If you want to use another port (for example, to keep using a browser tab on port 3191), set `PORT=3191` in `.env` and restart the server.
 
-## Deploy to Render with Neon
+## Deploy to Vercel with Neon
 
-1. Push this project to a GitHub repository you control. In Render, create a **Blueprint** using that repository and approve the `render.yaml` service.
-2. In the Render service environment settings, enter `DATABASE_URL` (the newly rotated Neon connection string), `ADMIN_USERNAME`, and a strong `ADMIN_PASSWORD`. These are secrets: never commit them, put them in frontend files, or send them in chat. `COOKIE_SECURE` is already set to `true` in the Render Blueprint.
-3. Deploy the service and open its `onrender.com` URL. Confirm the `/health` check succeeds, then sign in at `/staff` and verify the menu and ordering workflow. Print the universal QR only after deployment; its link must be the public Render URL.
-4. To preserve this computer's menu and order history, run the one-time migration from the project folder before taking live orders. Put `DATABASE_URL` only in your ignored local `.env` file for the migration, then run `npm run migrate:neon`. The command copies menu items, orders, and their saved meal preferences, and records its successful completion so it will not copy twice. Keep a private backup of `data/orders.db`; do not remove it until the Neon data is verified.
+The app uses Vercel's Node.js server deployment, with the public assets included in the server bundle. Staff sessions are signed with `SESSION_SECRET`, and login rate limits are stored in PostgreSQL so they work across serverless instances.
+
+1. In Vercel, choose **Add New → Project**, import `Watchduff/KaiKaiGud`, and deploy the `main` branch. Vercel detects the root `server.mjs`; [vercel.json](./vercel.json) includes the public assets used by the server.
+2. In the project **Settings → Environment Variables**, add `DATABASE_URL` (the rotated Neon connection string), `ADMIN_USERNAME`, a unique `ADMIN_PASSWORD` of at least 12 characters, and a randomly generated `SESSION_SECRET` of at least 32 characters. Apply them to Production and Preview as desired, then redeploy. Do not commit or share secret values.
+3. Open the Vercel deployment URL. Confirm `/health` returns `{"status":"ok"}`, sign in at `/staff`, and verify menu and ordering. The site enforces secure staff cookies on Vercel.
+4. The local SQLite menu and order history have already been copied to Neon. Do not run the one-time migration again unless intentionally resetting the migration process. Keep a private backup of `data/orders.db` until you verify the deployed menu and orders.
+5. Print the universal QR only after confirming the deployment URL works on a phone using mobile data. The QR code points to the current public app origin.
+
+For local development, `.env` remains private and is ignored by Git. `npm start` uses Neon when `DATABASE_URL` is present; if it is absent, the app uses SQLite.
 
 The starter menu uses rounded demo prices in Vatu (for example, VT 1,800 for a grilled chicken bowl and VT 250 for a soft drink); edit these in the staff menu workspace. Before launch, configure your actual menu/prices, test kitchen operations, and set up individual staff accounts rather than sharing the initial owner login.
 
-The customer menu must be reachable for QR ordering; only the staff dashboard and management APIs are restricted to authenticated staff. Payment processing is intentionally not integrated.
+Only the staff dashboard and management APIs are restricted to authenticated staff. Payment processing is intentionally not integrated.
